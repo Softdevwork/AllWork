@@ -1,113 +1,193 @@
-import React from 'react';
+import React, { PureComponent } from 'react';
 import {
-  ScrollView,
-  View,
-  Text,
-  TouchableOpacity,
-  Dimensions,
+  Animated,
+  FlatList,
+  ActivityIndicator,
+  AsyncStorage,
 } from 'react-native';
-import BubbleChart from '@utils/D3Bubble';
-import ProgressCircle from '../../lib/ProgressCircle';
-import Styles from './styles';
-import StackHeader from '../Header/StackHeader';
-import Screen from '../Screen';
-import IssueCircleParent from './issueCircleParent';
-import MyWeb from '../../lib/WebView';
-import Footer from '../Footer';
-const {width, height} = Dimensions.get ('window');
-class Issues extends Screen {
-  constructor (props) {
-    super (props);
+import { Text, View, Spinner } from 'native-base';
+import SafeView from 'react-native-safe-area-view';
+import Posts from './Posts';
+import Search from './searchHome';
+import { homeApi, cardApi } from '../../components/ApiParams/Home';
+import { regionApi } from '../common/data';
+import styles from './styles';
+import { userCurrentLocation } from '../../components/User/currentLocation';
+import calculateBounds from '../../components/Place/calculateBounds';
+import { latitudeDelta, longitudeDelta } from '../../utils/constants';
+import { LoveApiParam } from '../common/ApiParam';
+import { Regionget } from '../common/RegionGet';
 
+const AnimatedFlatList = Animated.createAnimatedComponent(FlatList);
+
+
+class HomeFeed extends PureComponent {
+  constructor(props) {
+    super(props);
     this.state = {
-      issues: [],
-      isLoading: true,
+      info: null,
+      refreshing: false,
+      serverData: [],
+      regionData: [],
+      preloadData: [],
+      fetching: false,
+      loading: true,
+      postState: 'allnewsfeed',
+      title: 'Top Stories',
     };
+    this.page = 1;
+    this.scrollY = new Animated.Value(0);
+    this.cardDetails = {};
+    this.enableClick = false;
+    this.noResults = false;
+    this.currentRegion = false;
   }
 
-  componentWillMount () {
-    this.props.navigation.setParams ({
-      hTitle: 'Issues',
-      hToggle: 'ListIssues',
-      hSettings: 'Settings',
-    });
+  handleRegionSearch = (value) => {
+    regionApi.rname = value;
+    this.props.getRegion(regionApi);
+  };
 
-    commonService
-      .getIssues (
-        this.props.screenProps.pipelineId,
-        this.props.screenProps.pipelineTimestamp
-      )
-      .then (response => {
-        //alert('IN'+nextProps.screenProps.pipelineId + ' '+response.length);
-        issues = response;
-        if (issues.length > 0) {
-          this.setState ({
-            issues: issues,
-            isLoading: false,
-          });
-        }
-      });
-  }
+  handleSearch = (value = '', locRegion = '') => {
+    this.noResults = false;
+    this.enableClick = true;
+    homeApi.datafor = this.state.postState;
+    homeApi.pgnum = 1;
+    homeApi.plocation = locRegion.plocation ? parseInt(locRegion.plocation, 0) : 0;
+    homeApi.pname = value;
+    this.setState({ loading: true, serverData: [], fetching: true });
+    this.props.getPost(homeApi);
+  };
 
-  componentWillReceiveProps (nextProps) {
-    //console.log('Props from issues=>>>>>>>>',nextProps + ' => '+this.state.issues.length)
-    if (
-      nextProps.screenProps &&
-      nextProps.screenProps.pipelineId &&
-      nextProps.screenProps.pipelineTimestamp
-    ) {
-      console.log ('Issues Mounted');
-      console.log (this.props.screenProps);
-      this.setState ({
-        isLoading: true,
-      });
-      //        .getIssuesByCategory (nextProps.screenProps.pipelineId)
-      commonService
-        .getIssues (
-          nextProps.screenProps.pipelineId,
-          nextProps.screenProps.pipelineTimestamp
-        )
-        .then (response => {
-          //alert('IN'+nextProps.screenProps.pipelineId + ' '+response.length);
-          issues = response;
-          if (issues.length > 0) {
-            issues = issues.filter (function (url) {
-              if (url.name && url.name.length > 0) return true;
-            });
-            this.setState ({
-              issues: issues,
-              isLoading: false,
-            });
-          }
-        });
+  handleClick = async (postData) => {
+    this.props.navigation.navigate('PostCard', { postData });
+  };
+  profileCard = (profileData) => {
+    console.log(profileData);
+    this.props.navigation.navigate('ProfileCard', { profileData });
+  };
+  loadMore = () => {
+    if (!this.onEndReachedCalledDuringMomentum) {
+      this.setState({ fetching: true });
+      if (this.props.postStore.phase === 'SUCCESS') {
+        this.page = this.page + 1;
+        homeApi.pgnum = this.page;
+        this.props.getPost(homeApi);
+      }
+      this.onEndReachedCalledDuringMomentum = true;
     }
   }
 
-  render () {
-    const {issues, isLoading} = this.state;
-       if (issues.length)
-         return (
-           <ScrollView>
-    	  <IssueCircleParent issues={issues} {...this.props.screenProps}/>
-           </ScrollView>
-         );
-    Uses D3
-       if (issues.length)
-         return (
-           <ScrollView>
-             <BubbleChart issues={issues} {...this.props.screenProps} />
-           </ScrollView>
-         );
 
+  addFavourite = (item) => {
+    const { serverData } = this.state;
+    const index = serverData.findIndex(serverData => serverData.act_id === item.act_id);
+    serverData[index].checklovestatus = true;
+    this.updateLoveApi(item, 1);
+    this.setState({ serverData });
+    this.forceUpdate();
+  }
+  removeFavourite = (item) => {
+    const { serverData } = this.state;
+    const index = serverData.findIndex(serverData => serverData.act_id === item.act_id);
+    serverData[index].checklovestatus = false;
+    this.updateLoveApi(item, 0);
+    this.setState({ serverData });
+    this.forceUpdate();
+  }
+  updateLoveApi = async (item, status) => {
+    const { user } = this.props.userStore;
+    const res = await LoveApiParam(item, user, status);
+    this.props.lovePost(res);
+  }
+
+  renderFooter = () => {
+    const { fetching } = this.state;
+    if (fetching) {
+      return (
+        <View style={{ marginBottom: 25 }}>
+          <ActivityIndicator
+            size="large"
+            color="#ed4e1c"
+            style={{ marginLeft: 8 }}
+          />
+        </View>
+      );
+    }
+    return <View />;
+  };
+  render() {
+    const { serverData, loading } = this.state;
+    const { currentLocEnable } = this.props.commonStore;
+    const Title = ({ index }) => {
+      if (index === 0) {
+        if (currentLocEnable && this.currentRegion) {
+          return (
+            <Text style={[styles.screenHeading, { fontSize: 13, fontWeight: '700' }]}>Sorry no posts found in this region. Here are some additional posts.</Text>
+          );
+        }
+        return (<Text style={styles.screenHeading}>{this.state.title}</Text>);
+      }
+      return null;
+    };
     return (
-      <View>
-        {' '}
-        <MyWeb issues={issues} {...this.props.screenProps} />
-        <Footer screenProps={this.props.screenProps} {...this.props} />
-      </View>
+      <SafeView style={styles.containerbackgroundcolor}>
+        <View style={styles.containerbackgroundcolor}>
+          <Search
+            y={this.scrollY}
+            navigation={this.props.navigation}
+            defaultInputType="Posts"
+            defaultPlaceHolder="Find by name, #best"
+            screen="HomeScreen"
+            search={this.handleSearch}
+            regionSearch={this.handleRegionSearch}
+            regionData={this.state.regionData}
+            handlePosts={this.handlePosts}
+            handleCurrentLocation={this.handleCurrentLocation}
+            searchText={this.props.commonStore.searchHomeText}
+          />
+          {!loading ? (
+            <AnimatedFlatList
+              contentContainerStyle={{
+                  // marginHorizontal: 22,
+                  marginTop: 19,
+                  marginBottom: 0,
+                }}
+              scrollEventThrottle={16}
+              onScroll={Animated.event([
+                  { nativeEvent: { contentOffset: { y: this.scrollY } } },
+                ])}
+              data={serverData}
+              renderItem={({ item, index }) => (
+                <View key={item.act_id.toString()}>
+                  <Title index={index} />
+                  {' '}
+                  <Posts
+                    postCard={this.handleClick}
+                    profileCard={this.profileCard}
+                    addFavourite={this.addFavourite}
+                    removeFavourite={this.removeFavourite}
+                    item={item}
+                    state={this.state}
+                  />
+                </View>
+                )}
+              onEndReached={() => this.loadMore()}
+              onEndReachedThreshold={12}
+              onMomentumScrollBegin={() => { this.onEndReachedCalledDuringMomentum = false; }}
+              keyExtractor={item => item.act_id.toString()}
+              ListFooterComponent={this.renderFooter}
+              onRefresh={this.onRefresh}
+              refreshing={this.state.refreshing}
+            />
+          ) : (
+            <Spinner color="#ed4e1c" style={styles.loader} />
+          )}
+        </View>
+      </SafeView>
     );
-    return <View style={[Styles.container, {height: height - 125}]} />;
   }
 }
 
-export default Issues;
+
+export default HomeFeed;
